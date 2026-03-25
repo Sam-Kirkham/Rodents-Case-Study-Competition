@@ -1,0 +1,306 @@
+## Various EDA
+
+```{r}
+library(tidyverse)
+df <- read_csv("311_rodent_calls.csv")
+```
+
+
+```{r}
+df$`Created Date` = mdy_hms(df$`Created Date`)
+df$`Closed Date` = mdy_hms(df$`Closed Date`)
+
+df$diff = as.numeric(df$`Closed Date` - df$`Created Date`)
+```
+
+
+```{r}
+hist(df$diff)
+```
+
+
+```{r}
+df_c = df |> 
+    filter(diff != 0) |> 
+    filter(diff < 1000000)
+
+hist(df_c$diff)
+```
+
+
+```{r}
+df_c |> 
+    ggplot(aes(x=`Council District`, y=diff)) +
+    geom_boxplot()
+```
+
+
+```{r}
+
+df_c |> 
+    ggplot(aes(x=Borough, y=diff)) +
+    geom_point()
+```
+
+
+
+```{r}
+counts <- df_c |> 
+    count(`Council District`)
+
+ggplot(data=counts, aes(x=`Council District`, y=n)) +
+    geom_point()
+
+```
+
+## Data Wrangling
+
+
+```{r}
+councils = read_csv("district_level_data.csv")
+land_use = vroom::vroom("land_use.csv")
+```
+
+
+```{r}
+# Calculate % of buildings built since 1950
+pct_before_1945 <- land_use |> 
+    group_by(`council district`) |> 
+    summarize(
+        pct_housing_pre_1940 = mean(yearbuilt <= 1940, na.rm = TRUE),
+        total_buildings = n()
+    )
+```
+
+
+
+```{r}
+new_df = councils |> 
+    left_join(pct_before_1945, by=join_by(`Council District` == `council district`))
+```
+
+```{r}
+restaurants = vroom::vroom("restaurants.csv")
+```
+
+```{r}
+active_counts = restaurants |> 
+    group_by(`Council District`) |> 
+    summarize(
+        restaurant_count = n_distinct(CAMIS),
+        .groups="drop"
+    ) |> mutate(`Council District` = as.double(`Council District`))
+```
+
+```{r}
+new_new_df = new_df |> 
+    left_join(active_counts, by=join_by(`Council District`==`Council District`))
+```
+
+```{r}
+write_csv(new_new_df, "councils_expanded.csv")
+```
+
+## Working on areal model
+
+
+```{r}
+library(sf)
+```
+
+
+```{r}
+df = df |> 
+    filter(!is.na(Latitude)) |> 
+    filter(!is.na(Longitude))
+
+sf = st_as_sf(df,
+            coords= c("Longitude", "Latitude"),
+            crs=4326)
+
+plot(st_geometry(sf), pch=20, cex=0.5)
+```
+
+
+```{r}
+districts = read_csv("council_districts.csv")
+districts = st_as_sf(districts, wkt="the_geom", crs=4326)
+
+plot(st_geometry(districts))
+```
+
+
+```{r}
+jdf = st_join(sf, districts, join=st_intersects)
+```
+
+
+```{r}
+library(viridis)
+jdf |> 
+    ggplot() +
+    geom_sf()
+```
+
+
+```{r}
+library(sf)
+library(dplyr)
+library(readr)
+
+# 1. Load your rodent data (the file you uploaded)
+rodent_stats <- read_csv("district_level_expanded.csv")
+
+# 2. Load the geometry CSV you got from NYC Open Data
+# Assume it is named 'Council_Districts.csv'
+geo_raw <- read_csv("council_districts.csv")
+
+# 3. Convert the geometry CSV to a spatial object (sf)
+# 'the_geom' is the standard WKT column name from NYC Open Data
+districts_geo <- st_as_sf(geo_raw, wkt = "the_geom", crs = 4326)
+
+# 4. Join them together
+# We match 'CounDist' from the map to 'Council District' from your data
+final_map_data <- districts_geo %>%
+  left_join(rodent_stats, by = c("CounDist" = "Council District"))
+
+# 5. Verify the join
+# Now you can plot any variable from your CSV, like 'total_calls'
+plot(final_map_data["total_calls"])
+```
+
+
+```{r}
+## Plot of total vals
+library(viridis)
+p1 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=confirmed_calls)) +
+    scale_fill_viridis() +
+    labs(title="Number of Confirmed Rodent Calls in 2024") +
+    theme_bw()
+
+p2 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=total_calls)) +
+    scale_fill_viridis() +
+    labs(title="Number of 
+    Total Rodent Calls in 2024") +
+    theme_bw()
+
+library(patchwork)
+
+p1+p2
+```
+
+
+```{r}
+## Plot of rates
+p1 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=confirmed_rate_per_1000)) +
+    geom_sf_label(aes(label=CounDist), size=2.5)+
+    scale_fill_viridis() +
+    labs(title="Confirmed Rodent Call Rate") +
+    theme_bw()
+
+p2 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=report_rate_per_1000)) +
+        geom_sf_label(aes(label=CounDist), size=2.5)+
+    scale_fill_viridis() +
+    labs(title="Total Rodent Call Rate") +
+    theme_bw()
+
+p1+p2
+```
+
+### Areal Modeling
+
+```{r}
+final_map_data$density = final_map_data$population / final_map_data$Shape_Area
+final_map_data$people_per_house = final_map_data$population / final_map_data$housing_units
+final_map_data$rest_density = final_map_data$restaurant_count / final_map_data$Shape_Area
+```
+
+```{r}
+library(spmodel)
+mod1 = spautor(confirmed_rate_per_1000 ~ density+people_per_house*poverty_rate*pct_vacant_housing_units + pct_households_broadband, spcov_type='car', data=final_map_data)
+
+summary(mod)
+AIC(mod)
+```
+
+```{r}
+library(spmodel)
+mod2 = spautor(confirmed_rate_per_1000 ~ density+people_per_house*poverty_rate*pct_vacant_housing_units*pct_households_broadband, spcov_type='car', data=final_map_data)
+
+summary(mod)
+AIC(mod1, mod2)
+```
+
+```{r}
+mod3 = spautor(confirmed_rate_per_1000 ~ density+people_per_house+pct_vacant_housing_units + pct_households_broadband, spcov_type='car', data=final_map_data)
+
+summary(mod3)
+```
+
+```{r}
+mod4 = spautor(confirmed_rate_per_1000 ~ people_per_house+pct_vacant_housing_units + pct_housing_pre_1940+restaurant_count, spcov_type='car', data=final_map_data)
+
+summary(mod4)
+```
+
+```{r}
+loocv(mod4)
+```
+
+```{r}
+vif_check = lm(confirmed_rate_per_1000 ~ density+people_per_house+pct_vacant_housing_units + pct_households_broadband + pct_housing_pre_1940 + restaurant_count, data=final_map_data)
+
+car::vif(vif_check, type='predictor')
+```
+
+
+```{r}
+mod_v2 <- spautor(confirmed_rate_per_1000 ~ 
+    log(population) + 
+    log(median_household_income) + 
+    median_gross_rent + 
+    pct_vacant_housing_units, 
+    data = final_map_data, 
+    spcov_type = "car")
+
+summary(mod_v2)
+```
+
+
+### Validating mod4
+
+```{r}
+r = rstandard(mod4)
+```
+
+
+```{r}
+plot(r, mod3$fitted$response)
+
+library(spdep)
+
+nb <- poly2nb(final_map_data)
+lw = nb2listw(nb, style="W")
+moran.test(r, lw)
+```
+
+
+```{r}
+hist(r, freq=FALSE)
+curve(dnorm(x,0,1), add=TRUE, col="red")
+```
+
+
+```{r}
+ks.test(r, "pnorm")
+```
+
+
