@@ -1,0 +1,29 @@
+
+
+```{r}
+
+## Setup Code
+library(tidyverse)
+library(sf)
+```
+
+```{r}
+## Plot of rates
+p1 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=confirmed_rate_per_1000)) + # Gives the shapes and fills them
+    geom_sf_label(aes(label=CounDist), size=2.5)+
+    scale_fill_viridis() +
+    labs(title="Confirmed Rodent Call Rate") +
+    theme_bw()
+
+p2 <- final_map_data |> 
+    ggplot() +
+    geom_sf(aes(fill=report_rate_per_1000)) +
+        geom_sf_label(aes(label=CounDist), size=2.5)+
+    scale_fill_viridis() +
+    labs(title="Total Rodent Call Rate") +
+    theme_bw()
+
+p1+p2
+```
